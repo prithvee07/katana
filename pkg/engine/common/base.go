@@ -37,6 +37,12 @@ import (
 const (
 	backoffBase = 1 * time.Second
 	backoffMax  = 30 * time.Second
+
+	// defaultRedirectBodyReadSize bounds the redirect-response body read below
+	// when BodyReadSize is unset (<=0), matching the CLI's own default for
+	// -max-response-size. Reading with no limit at all would let a malicious
+	// or oversized redirect target exhaust memory.
+	defaultRedirectBodyReadSize = 4 * 1024 * 1024
 )
 
 type hostBackoff struct {
@@ -352,7 +358,15 @@ func (s *Shared) NewCrawlSessionWithURL(URL string) (*CrawlSession, error) {
 		s.Enqueue(queue, navigationRequests...)
 	}
 	httpclient, _, err := BuildHttpClient(s.Options.Dialer, s.Options.Options, func(resp *http.Response, depth int) {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, int64(s.Options.Options.BodyReadSize)))
+		// BodyReadSize <= 0 (e.g. library callers that never set it) means the
+		// limit was never configured; fall back to a bounded default instead
+		// of an unbounded read, which would otherwise let a redirect response
+		// body of unbounded size exhaust memory.
+		bodyReadSize := int64(s.Options.Options.BodyReadSize)
+		if bodyReadSize <= 0 {
+			bodyReadSize = defaultRedirectBodyReadSize
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, bodyReadSize))
 		reader, _ := goquery.NewDocumentFromReader(bytes.NewReader(body))
 		var technologyKeys []string
 		if s.Options.Wappalyzer != nil {
