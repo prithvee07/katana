@@ -164,7 +164,7 @@ func launchBrowserAgent(options *types.CrawlerOptions, index int) (*browserAgent
 		if owned {
 			return
 		}
-		_ = browser.Close()
+		closeBrowser(browser, chromeLauncher != nil)
 		_ = cdpWS.Close()
 		if chromeLauncher != nil {
 			chromeLauncher.Kill()
@@ -202,13 +202,34 @@ func launchBrowserAgent(options *types.CrawlerOptions, index int) (*browserAgent
 	return agent, nil
 }
 
+// shouldCloseBrowser reports whether it is safe to call rod.Browser.Close()
+// on a browser handle. Without an incognito context (hasContext == false),
+// rod issues the CDP Browser.close command instead of
+// TargetDisposeBrowserContext -- correct for a browser katana launched
+// itself (owned == true), but for one attached via -chrome-ws-url
+// (owned == false) that would terminate a shared browser other crawls, or
+// the browser's actual owner, still need. When there IS an incognito
+// context, Close() only disposes that context and is always safe.
+func shouldCloseBrowser(hasContext, owned bool) bool {
+	return hasContext || owned
+}
+
+// closeBrowser closes a browser handle per shouldCloseBrowser.
+func closeBrowser(browser *rod.Browser, owned bool) {
+	if browser == nil {
+		return
+	}
+	if !shouldCloseBrowser(browser.BrowserContextID != "", owned) {
+		return
+	}
+	_ = browser.Close()
+}
+
 func (a *browserAgent) close() error {
 	if a == nil {
 		return nil
 	}
-	if a.browser != nil {
-		_ = a.browser.Close()
-	}
+	closeBrowser(a.browser, a.chromeLauncher != nil)
 	if a.cdpWS != nil {
 		// Close AFTER browser.Close, which dispatches
 		// Target.disposeBrowserContext over this same socket.
